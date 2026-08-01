@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="theme-color" content="#f6f1e3">
+    <title>古诗词大全</title>
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- 加载遮罩 -->
+<div id="loadingMask" style="position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;">
+    <div style="font-size:48px;">📜</div>
+    <div style="color:var(--text-secondary);font-family:var(--font-kai);">古诗词大全</div>
+    <div style="color:var(--text-secondary);font-size:12px;">9 万首 · 完全离线</div>
+    <div style="width:200px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:8px;">
+        <div class="load-bar" style="width:0%;height:100%;background:var(--accent);transition:width 0.3s;"></div>
+    </div>
+    <div class="load-text" style="color:var(--text-secondary);font-size:12px;">0%</div>
+</div>
+
+<!-- 顶部导航栏 -->
+<header class="topbar">
+    <button class="topbar-btn" onclick="App.openSideMenu()" aria-label="菜单">☰</button>
+    <div class="topbar-title" id="topbarTitle">古诗词大全</div>
+    <div class="topbar-spacer"></div>
+</header>
+
+<main class="main with-tabbar">
+
+    <!-- ============== 首页 ============== -->
+    <div id="page-home" class="page active">
+        <div class="hero">
+            <h1>古诗词大全</h1>
+            <p>全唐诗 · 宋词 · 诗经 · 楚辞 · 元曲</p>
+        </div>
+
+        <div id="pod" class="poem-of-day"></div>
+
+        <div class="section-title">分类</div>
+        <div id="catGrid" class="cat-grid"></div>
+    </div>
+
+    <!-- ============== 列表页 ============== -->
+    <div id="page-list" class="page">
+        <div class="search-box">
+            <span class="search-box-icon">🔍</span>
+            <input id="searchInput" type="search" placeholder="搜索诗名/作者/内容/标签" autocomplete="off">
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
+            <h2 id="listTitle" style="font-family:var(--font-kai);color:var(--accent);font-size:18px;">诗词</h2>
+            <div id="listCount" style="color:var(--text-secondary);font-size:12px;"></div>
+        </div>
+        <div id="listContainer" class="poem-list"></div>
+        <div id="listMore" class="list-footer hide" onclick="App.loadMoreList()">点击加载更多 ↓</div>
+    </div>
+
+    <!-- ============== 详情页 ============== -->
+    <div id="page-detail" class="page">
+        <div class="detail">
+            <div id="detailTitle" class="d-title"></div>
+            <div id="detailSubtitle" class="d-subtitle"></div>
+            <div id="detailAuthor" class="d-byline"></div>
+            <div id="detailBody" class="d-body"></div>
+            <div id="detailAnnotations" class="d-annotations"></div>
+            <div id="detailTags" class="d-tags"></div>
+        </div>
+        <div class="action-bar">
+            <button id="btnMask" class="action-btn" onclick="App.toggleMask()">遮罩背诵</button>
+            <button id="btnFav" class="action-btn" onclick="App.toggleFav()">☆ 收藏</button>
+            <button id="btn-tr" class="action-btn anno-btn" onclick="App.toggleAnno('tr')">译</button>
+            <button id="btn-ex1" class="action-btn anno-btn" onclick="App.toggleAnno('ex1')">注</button>
+            <button id="btn-int" class="action-btn anno-btn" onclick="App.toggleAnno('int')">讲</button>
+        </div>
+    </div>
+
+    <!-- ============== 收藏页 (复用 list 视图) ============== -->
+    <!-- 复用 #page-list -->
+
+    <!-- ============== 历史页 (复用 list 视图) ============== -->
+    <!-- 复用 #page-list -->
+
+    <!-- ============== 诗人页 ============== -->
+    <div id="page-author" class="page">
+        <div class="hero" style="padding:20px 16px;">
+            <h1 style="font-size:24px;">诗人</h1>
+            <p>点击查看诗人生平与作品</p>
+        </div>
+        <div id="authorGrid" class="cat-grid" style="grid-template-columns:repeat(3,1fr);"></div>
+    </div>
+
+</main>
+
+<!-- 滚动到顶 -->
+<button class="to-top" id="toTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<!-- 底部 tab 栏 -->
+<nav class="tabbar">
+    <button class="tab-btn active" data-page="home">
+        <span class="icon">🏠</span><span>首页</span>
+    </button>
+    <button class="tab-btn" data-page="list">
+        <span class="icon">📖</span><span>诗库</span>
+    </button>
+    <button class="tab-btn" data-page="author">
+        <span class="icon">👤</span><span>诗人</span>
+    </button>
+    <button class="tab-btn" data-page="fav">
+        <span class="icon">⭐</span><span>收藏</span>
+    </button>
+    <button class="tab-btn" data-page="history">
+        <span class="icon">🕘</span><span>历史</span>
+    </button>
+</nav>
+
+<!-- 侧边菜单 -->
+<div class="side-mask" id="sideMask"></div>
+<aside class="side-menu" id="sideMenu">
+    <div id="sideMenuContent"></div>
+</aside>
+
+<!-- Toast -->
+<div id="toast" class="toast"></div>
+
+<!-- 离线数据: 在 app.js 之前同步注入 window.POEM_INDEX / window.POEM_AUTHORS / window.POEM_NOTES_INDEX,
+     解决 file:// / WebView 下 fetch 被拦截的问题 -->
+<script src="data/index.js"></script>
+<script src="data/authors.js"></script>
+<script src="data/notes_index.js"></script>
+<script src="data/notes_part_index.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

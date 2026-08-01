@@ -1,0 +1,50 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+*.swp
+*.swo
+
+# Node
+node_modules/
+package-lock.json
+yarn.lock
+npm-debug.log
+yarn-error.log
+
+# Android build
+android/.gradle/
+android/build/
+android/app/build/
+android/captures/
+android/local.properties
+android/.cxx/
+android/app/release/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# Capacitor 自动生成的 assets (每次 cap sync 会重新生成, 不入 git)
+# 用户 clone 后执行 `npx cap sync android` 即可恢复
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/app/src/main/assets/native-bridge.js
+
+# Gradle
+.gradle/
+gradle-app.setting
+.gradletasknamecache
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath

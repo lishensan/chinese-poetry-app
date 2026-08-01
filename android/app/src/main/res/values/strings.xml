@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">诗词学习</string>
+    <string name="title_activity_main">诗词学习</string>
+    <string name="package_name">com.poetry.learn</string>
+    <string name="custom_url_scheme">com.poetry.learn</string>
+</resources>
