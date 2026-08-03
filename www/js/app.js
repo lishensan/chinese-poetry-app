@@ -637,7 +637,8 @@
         if (State.listIds.length === 0) { toast('该分类暂无作品'); return; }
         State.listPartLoaded = 0;
         State.listOffset = 0;
-        State.listPageSize = 20;
+        // 自适应 pageSize: 小分类全展示, 避免翻 2 页才看到第 24 条
+        State.listPageSize = State.listIds.length < 200 ? State.listIds.length : (State.listIds.length <= 1000 ? 50 : 20);
         switchPage('list');
         renderListHeader();
         const container = $('#listContainer');
@@ -809,11 +810,40 @@
         if (State.listMode === 'category' && State.listSource) {
             const source = State.listSource;
             const parts = (State.index.source_parts && State.index.source_parts[source]) || [];
-            // 找到第一个已加载的分片
+            // 小分类 (< 500 首): 一次性加载所有分片, 一次性渲染全部, 避免翻页才看到第 24 条
+            // 大分类: 按 part 分页
+            if (State.listIds.length <= 500 && parts.length > 1) {
+                for (let i = 0; i < parts.length; i++) {
+                    if (!State.liteBySrc.has(source) || !State.liteBySrc.get(source)[i]) {
+                        try { await ensureLitePart(source, i); } catch (e) { /* 单个失败继续 */ }
+                    }
+                }
+                // 一次性渲染所有 (按 State.listIds 顺序, 已经是 by_source 顺序)
+                const start = State.listOffset;
+                const slice = State.listIds.slice(start, start + State.listPageSize);
+                if (slice.length === 0) {
+                    list.innerHTML = '<div class="empty">该分类暂无内容</div>';
+                    $('#listMore').classList.add('hide');
+                    return;
+                }
+                const html = slice.map(id => {
+                    const p = State.liteById.get(id);
+                    if (!p) return '';
+                    return renderItem(p);
+                }).join('');
+                list.innerHTML = (start > 0 ? list.innerHTML : '') + html;
+                State.listOffset += slice.length;
+                const hasMore = State.listOffset < State.listIds.length;
+                const more = $('#listMore');
+                more.classList.toggle('hide', !hasMore);
+                more.textContent = '点击加载更多 ↓';
+                return;
+            }
+            // 大分类: 按 part 分页
             let curArr = null;
             let curPart = -1;
             for (let i = 0; i < parts.length; i++) {
-                const arr = State.liteBySrc.get(source) ? State.liteBySrc.get(source)[i] : null;
+                const arr = State.liteBySrc.has(source) ? State.liteBySrc.get(source)[i] : null;
                 if (arr) { curArr = arr; curPart = i; break; }
             }
             if (!curArr) {
