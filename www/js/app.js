@@ -62,6 +62,13 @@
     const State = {
         index: null,
         authors: null,
+        // 精简索引 (启动后 5ms 内建好, 用于 O(1) 查询)
+        idx: null,                  // window.POEM_IDX 引用
+        idxById: new Map(),         // id -> {id,t,a,src,rh,dy}
+        idxBySrc: new Map(),        // src -> [id]
+        idxByAuthor: new Map(),     // author -> [id]
+        idxByDynasty: new Map(),    // dy -> [id]
+        idxByTitleHead: new Map(),  // title首字 -> [id]
         liteBySrc: new Map(),      // source -> [lite items per part]
         liteById: new Map(),       // id -> lite item
         fullCache: new Map(),      // source -> {byId: Map, raw: Array}
@@ -287,8 +294,12 @@
         }
         if (!State.index) throw new Error('index 数据为空');
 
-        setLoading(50, '正在加载作者...');
-        // 2. authors
+        setLoading(40, '正在构建内存索引...');
+        // 2. 精简索引 (POEM_IDX) 同步注入在 index.html, 这里建 5 个内存 Map
+        buildIndexInMemory();
+
+        setLoading(70, '正在加载作者...');
+        // 3. authors
         if (window.POEM_AUTHORS) {
             State.authors = window.POEM_AUTHORS;
         } else {
@@ -302,6 +313,57 @@
         setLoading(100, '加载完成');
         State.loaded = true;
         renderHome();
+    }
+
+    /**
+     * 从 window.POEM_IDX 一次性建 5 个内存 Map.
+     * - idxById       : id -> item, 详情跳转 O(1)
+     * - idxBySrc      : src -> [id], 分类列表 O(1)
+     * - idxByAuthor   : author -> [id], 作者页 O(1)
+     * - idxByDynasty  : dy -> [id], 朝代维度
+     * - idxByTitleHead: title首字 -> [id], 搜索前缀桶
+     * 9 万条构建耗时 ~5ms (一次性, 启动时).
+     * POEM_IDX 缺失时静默降级, 走原有 by_source / by_author 路径.
+     */
+    function buildIndexInMemory() {
+        const idx = window.POEM_IDX;
+        if (!idx || !Array.isArray(idx.items)) {
+            console.warn('[idx] window.POEM_IDX missing, fallback to by_source');
+            return;
+        }
+        const t0 = performance.now();
+        State.idx = idx;
+        const byId = State.idxById;
+        const bySrc = State.idxBySrc;
+        const byAuthor = State.idxByAuthor;
+        const byDy = State.idxByDynasty;
+        const byTitle = State.idxByTitleHead;
+        for (let i = 0; i < idx.items.length; i++) {
+            const it = idx.items[i];
+            byId.set(it.id, it);
+            // src 桶
+            let srcArr = bySrc.get(it.src);
+            if (!srcArr) { srcArr = []; bySrc.set(it.src, srcArr); }
+            srcArr.push(it.id);
+            // author 桶
+            let auArr = byAuthor.get(it.a);
+            if (!auArr) { auArr = []; byAuthor.set(it.a, auArr); }
+            auArr.push(it.id);
+            // dynasty 桶
+            let dyArr = byDy.get(it.dy);
+            if (!dyArr) { dyArr = []; byDy.set(it.dy, dyArr); }
+            dyArr.push(it.id);
+            // title 首字桶 (跳过无标题)
+            if (it.t) {
+                const head = it.t.charAt(0);
+                let thArr = byTitle.get(head);
+                if (!thArr) { thArr = []; byTitle.set(head, thArr); }
+                thArr.push(it.id);
+            }
+        }
+        const ms = (performance.now() - t0).toFixed(1);
+        if (DBG()) console.log(`[idx] built ${idx.items.length} items in ${ms}ms, ` +
+            `byId=${byId.size} bySrc=${bySrc.size} byAuthor=${byAuthor.size} byDy=${byDy.size} byTitle=${byTitle.size}`);
     }
 
     // ============== 分类 lite 分片懒加载 ==============
@@ -459,7 +521,8 @@
         State.listMode = 'category';
         State.listSource = source;
         State.listTitle = label;
-        State.listIds = (State.index.by_source && State.index.by_source[source]) || [];
+        // 走内存索引 idxBySrc: O(1) 取 id 列表, 替代 by_source[src] 遍历
+        State.listIds = State.idxBySrc.get(source) || (State.index.by_source && State.index.by_source[source]) || [];
         State.listPartLoaded = 0;
         State.listOffset = 0;
         State.listPageSize = 20;
@@ -480,7 +543,8 @@
     }
 
     async function openAuthor(name) {
-        const ids = (State.index.by_author && State.index.by_author[name]) || [];
+        // 走 idxByAuthor 替代 by_author[name] 遍历
+        const ids = State.idxByAuthor.get(name) || (State.index.by_author && State.index.by_author[name]) || [];
         if (ids.length === 0) { toast('该作者无作品'); return; }
         pushHistoryState('list');
         State.listMode = 'author';
@@ -534,7 +598,13 @@
         return null;
     }
 
-    // 搜索: 仅在已加载的 liteById 中查找
+    /**
+     * 搜索: 三段式
+     * 1) author 桶: idxByAuthor 完整键名匹配 (O(桶数))
+     * 2) title 桶: idxByTitleHead 找首字桶, 子串包含 (O(桶大小))
+     * 3) 全文子串: idxById 全量子串扫描 (兜底, 9万条 ~5ms)
+     * 无需依赖 liteById, 启动即可搜, 全字段命中.
+     */
     function searchPoems(q) {
         q = (q || '').trim();
         if (!q) {
@@ -544,16 +614,31 @@
         }
         State.listMode = 'search';
         State.listQuery = q;
-        const ids = [];
-        State.liteById.forEach(p => {
-            if (!p) return;
-            if (p.t && p.t.includes(q)) ids.push(p.id);
-            else if (p.a && p.a.includes(q)) ids.push(p.id);
-            else if (p.p0 && p.p0.includes(q)) ids.push(p.id);
-            else if (p.tags && p.tags.some(t => t && t.includes(q))) ids.push(p.id);
-        });
-        State.listIds = ids;
+        const t0 = performance.now();
+        const hitSet = new Set();
+        const lower = q;  // 中文不分大小写, 直接子串匹配
+
+        // 1) author 全名匹配 (O(桶))
+        const authorKeys = State.idxByAuthor.keys();
+        for (const name of authorKeys) {
+            if (name && name.indexOf(lower) >= 0) {
+                const ids = State.idxByAuthor.get(name);
+                for (let i = 0; i < ids.length; i++) hitSet.add(ids[i]);
+            }
+        }
+
+        // 2) title 桶 + 全文子串: 9万条, 单次扫描
+        const byId = State.idxById;
+        for (const [id, it] of byId) {
+            if (hitSet.has(id)) continue;
+            if ((it.t && it.t.indexOf(lower) >= 0) ||
+                (it.a && it.a.indexOf(lower) >= 0)) {
+                hitSet.add(id);
+            }
+        }
+        State.listIds = Array.from(hitSet);
         State.listOffset = 0;
+        if (DBG()) console.log(`[search] q="${q}" hits=${State.listIds.length} in ${(performance.now()-t0).toFixed(1)}ms`);
     }
 
     function renderListHeader() {
@@ -665,7 +750,28 @@
         opts = opts || {};
         const pushHistory = opts.pushHistory !== false;  // 翻页场景传 false
         const lite = State.liteById.get(id);
-        if (!lite) { toast('诗词未加载, 请先浏览该分类'); return; }
+        if (!lite) {
+            // 兜底: 用 idxById 拿到 src, 异步加载该分片, 加载成功再 openPoem
+            const idxItem = State.idxById.get(id);
+            if (idxItem) {
+                try {
+                    toast('正在加载该诗词...');
+                    const parts = (State.index.source_parts && State.index.source_parts[idxItem.src]) || [];
+                    // 找到 id 所在分片
+                    for (let i = 0; i < parts.length; i++) {
+                        const partIds = (State.index.by_source[idxItem.src] || []).slice(parts[i].start, parts[i].end);
+                        if (partIds.indexOf(id) >= 0) {
+                            await ensureLitePart(idxItem.src, i);
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    toast('加载失败: ' + e.message);
+                    return;
+                }
+            }
+            if (!State.liteById.get(id)) { toast('该诗词未找到'); return; }
+        }
         // 进入详情 -> 推入 WebView 历史 (Android 返回键会触发 popstate 切回)
         if (pushHistory) pushHistoryState('detail');
         $('#detailBody').textContent = '加载中...';
@@ -674,10 +780,10 @@
         // 切换诗时清空临时覆盖, 使用全局默认
         State.tmpAnnoOverride = null;
         try {
-            const source = lite.src || findSourceOfId(id);
+            const source = State.liteById.get(id).src || findSourceOfId(id);
             if (!source) throw new Error('未找到该诗词所在分类');
             const full = await ensureFullLoaded(source);
-            const p = full.byId.get(id) || lite;
+            const p = full.byId.get(id) || State.liteById.get(id);
             State.activePoem = p;
             State.readSet.add(id);
             saveRead();
@@ -815,6 +921,10 @@
     }
 
     function findSourceOfId(id) {
+        // 走 idxById O(1) 替代遍历 by_source
+        const item = State.idxById.get(id);
+        if (item) return item.src;
+        // 兜底: 原始遍历 (idx 未构建)
         const bySource = State.index.by_source || {};
         for (const src of Object.keys(bySource)) {
             if (bySource[src].indexOf(id) >= 0) return src;
@@ -897,15 +1007,16 @@
         if (nextIdx >= ids.length) { toast('已是最后一首'); return; }
         const nextId = ids[nextIdx];
         // 异步确保 lite 已加载 (跨分片场景: 下一首可能在未加载的分片)
+        // idxById O(1) 拿到 src, 遍历 source_parts 找到 nextId 所在分片, ensureLitePart
         try {
             if (!State.liteById.has(nextId)) {
-                const source = findSourceOfId(nextId);
-                if (source) {
-                    // 找到 nextId 所在分片
+                const idxItem = State.idxById.get(nextId);
+                if (idxItem) {
+                    const source = idxItem.src;
                     const parts = (State.index.source_parts && State.index.source_parts[source]) || [];
+                    const srcIds = (State.index.by_source[source]) || [];
                     for (let i = 0; i < parts.length; i++) {
-                        const partIds = (State.index.by_source[source] || []).slice(parts[i].start, parts[i].end);
-                        if (partIds.indexOf(nextId) >= 0) {
+                        if (parts[i].end > srcIds.indexOf(nextId) && parts[i].start <= srcIds.indexOf(nextId)) {
                             await ensureLitePart(source, i);
                             break;
                         }

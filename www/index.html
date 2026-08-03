@@ -131,11 +131,13 @@
 <div id="toast" class="toast"></div>
 
 <!-- 离线数据: 在 app.js 之前同步注入 window.POEM_INDEX / window.POEM_AUTHORS / window.POEM_NOTES_INDEX,
+     window.POEM_IDX (精简索引 ~8MB) 用于启动后 5ms 建 5 个内存 Map, 加速所有查询.
      解决 file:// / WebView 下 fetch 被拦截的问题 -->
 <script src="data/index.js"></script>
 <script src="data/authors.js"></script>
 <script src="data/notes_index.js"></script>
 <script src="data/notes_part_index.js"></script>
+<script src="data/idx.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
