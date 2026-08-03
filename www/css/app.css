@@ -387,6 +387,48 @@ body { padding-bottom: env(safe-area-inset-bottom); }
     margin-bottom: 16px;
     flex-wrap: wrap;
 }
+
+/* 详情页翻页导航条 (上一首 / 下一首) */
+.detail-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 8px 0 12px;
+    padding: 8px 10px;
+    background: var(--bg-paper);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+.dn-btn {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-family: var(--font-kai);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.dn-btn:active { transform: scale(0.97); }
+.dn-btn.disabled,
+.dn-btn[disabled] {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+.dn-pos {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-family: var(--font-family);
+    white-space: nowrap;
+    padding: 0 4px;
+    min-width: 64px;
+    text-align: center;
+}
 .action-btn {
     flex: 1;
     min-width: 70px;

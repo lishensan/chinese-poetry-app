@@ -10,6 +10,7 @@
  *   - 并发去重: 同一资源同时多次请求只发一次
  *   - 超时与重试: script 注入与 fetch 均有超时, 失败最多重试 2 次
  *   - 错误隔离: 单个分片失败不影响其它分片
+ *   - 返回手势兼容: 集中 pushState, popstate 防循环, WebView.goBack() 切页
  * ============================================ */
 (function () {
     'use strict';
@@ -33,6 +34,29 @@
     const NOTES_BASE = 'data/notes/';    // notes js 相对路径前缀
     // 页面级稳定 cache buster (避免每次重试重读)
     const PAGE_V = Date.now();
+
+    // 调试开关: window.POETRY_DEBUG = true 打开 history/导航日志
+    const DBG = () => !!(window.POETRY_DEBUG);
+    const logNav = (...a) => { if (DBG()) try { console.log('[nav]', ...a); } catch (e) { /* ignore */ } };
+
+    // 防 popstate 处理中再 pushState 导致历史栈污染
+    let inPopstate = false;
+    /**
+     * 统一 pushState: 集中处理 try-catch, 防止隐私模式抛错.
+     * 在 popstate 处理中调用会被静默忽略, 避免栈污染.
+     */
+    function pushHistoryState(pageName) {
+        if (inPopstate) {
+            logNav('pushState skipped (in popstate)', pageName);
+            return;
+        }
+        try {
+            history.pushState({ page: pageName }, '');
+            logNav('push', pageName, 'len=', history.length);
+        } catch (e) {
+            logNav('pushState fail', e && e.message);
+        }
+    }
 
     // ============== 全局状态 ==============
     const State = {
@@ -365,6 +389,14 @@
         window.scrollTo(0, 0);
         if (name === 'home') renderHome();
         else if (name === 'author') renderAuthorPage();
+        else if (name === 'list') {
+            // 列表页: 重新渲染 (popstate 回到 list 时, 数据应还在 State)
+            renderListHeader();
+            renderList();
+        } else if (name === 'detail') {
+            // 详情页: popstate 回到 detail 时, 重新渲染 (activePoem 应还在)
+            if (State.activePoem) renderDetail();
+        }
     }
 
     // ============== 首页 ==============
@@ -423,6 +455,7 @@
 
     // ============== 列表 ==============
     async function openCategory(source, label) {
+        pushHistoryState('list');
         State.listMode = 'category';
         State.listSource = source;
         State.listTitle = label;
@@ -449,7 +482,7 @@
     async function openAuthor(name) {
         const ids = (State.index.by_author && State.index.by_author[name]) || [];
         if (ids.length === 0) { toast('该作者无作品'); return; }
-        try { history.pushState({ page: 'list' }, ''); } catch (e) { /* 隐私模式可能受限 */ }
+        pushHistoryState('list');
         State.listMode = 'author';
         State.listSource = null;
         State.listTitle = name;
@@ -628,9 +661,13 @@
     // 当前正在加载的注释请求版本, 防止旧请求覆盖新诗
     let annoLoadVer = 0;
 
-    async function openPoem(id) {
+    async function openPoem(id, opts) {
+        opts = opts || {};
+        const pushHistory = opts.pushHistory !== false;  // 翻页场景传 false
         const lite = State.liteById.get(id);
         if (!lite) { toast('诗词未加载, 请先浏览该分类'); return; }
+        // 进入详情 -> 推入 WebView 历史 (Android 返回键会触发 popstate 切回)
+        if (pushHistory) pushHistoryState('detail');
         $('#detailBody').textContent = '加载中...';
         $('#detailAnnotations').innerHTML = '';
         switchPage('detail');
@@ -805,7 +842,100 @@
         $('#btnFav').classList.toggle('active', isFav);
         // 注释按钮初始态
         updateAnnoBtns();
+        // 翻页导航条: 根据当前列表位置更新按钮禁用态
+        updateDetailNav();
     }
+
+    /**
+     * 查找当前 activePoem 在 State.listIds 中的下标.
+     * @returns {number} -1 表示未找到 (例如从首页"今日一诗"直接进入)
+     */
+    function currentPoemIndex() {
+        const p = State.activePoem;
+        if (!p || !Array.isArray(State.listIds) || State.listIds.length === 0) return -1;
+        return State.listIds.indexOf(p.id);
+    }
+
+    /**
+     * 更新翻页按钮状态 (上一首/下一首禁用 + 位置 N/M).
+     * 单条列表 / 不在 listIds 中 / listIds 为空 -> 整个 nav 隐藏.
+     */
+    function updateDetailNav() {
+        const nav = $('#detailNav');
+        const pos = $('#detailNavPos');
+        const prev = $('#btnPrevPoem');
+        const next = $('#btnNextPoem');
+        if (!nav || !pos || !prev || !next) return;
+        const ids = State.listIds || [];
+        const idx = currentPoemIndex();
+        if (idx < 0 || ids.length < 2) {
+            // 不在可翻页上下文 (例如首页今日一诗), 或只有 1 首
+            nav.classList.add('hide');
+            return;
+        }
+        nav.classList.remove('hide');
+        pos.textContent = (idx + 1) + ' / ' + ids.length;
+        prev.disabled = idx <= 0;
+        next.disabled = idx >= ids.length - 1;
+        prev.classList.toggle('disabled', prev.disabled);
+        next.classList.toggle('disabled', next.disabled);
+    }
+
+    /**
+     * 跳转到上一首/下一首 (offset = -1 / +1).
+     * 不修改 listOffset 和 listIds, 仅在当前列表内游走.
+     * 翻页时复用 openPoem (异步加载 full + 注释 + 写历史).
+     * 边界: 已是第一/最后 -> toast 提示, 不弹错.
+     */
+    async function stepPoem(offset) {
+        const ids = State.listIds || [];
+        if (ids.length === 0) { toast('当前列表为空'); return; }
+        const idx = currentPoemIndex();
+        if (idx < 0) { toast('当前页不在列表中, 无法翻页'); return; }
+        const nextIdx = idx + offset;
+        if (nextIdx < 0) { toast('已是第一首'); return; }
+        if (nextIdx >= ids.length) { toast('已是最后一首'); return; }
+        const nextId = ids[nextIdx];
+        // 异步确保 lite 已加载 (跨分片场景: 下一首可能在未加载的分片)
+        try {
+            if (!State.liteById.has(nextId)) {
+                const source = findSourceOfId(nextId);
+                if (source) {
+                    // 找到 nextId 所在分片
+                    const parts = (State.index.source_parts && State.index.source_parts[source]) || [];
+                    for (let i = 0; i < parts.length; i++) {
+                        const partIds = (State.index.by_source[source] || []).slice(parts[i].start, parts[i].end);
+                        if (partIds.indexOf(nextId) >= 0) {
+                            await ensureLitePart(source, i);
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            logNav('stepPoem preload fail', e && e.message);
+            toast('加载下一首失败, 请稍后重试');
+            return;
+        }
+        if (!State.liteById.has(nextId)) {
+            toast('该诗暂未加载, 请先浏览相关分类');
+            return;
+        }
+        // 翻页: replaceState 替换当前 detail state (不增加栈深度),
+        // 调用 openPoem 时传 {pushHistory:false} 避免重复 push,
+        // 这样从列表进入详情后连续翻页, 物理返回键一次即回到列表.
+        try {
+            history.replaceState({ page: 'detail' }, '');
+            logNav('stepPoem replaceState detail, len=', history.length);
+        } catch (e) {
+            logNav('stepPoem replaceState fail', e && e.message);
+        }
+        await openPoem(nextId, { pushHistory: false });
+        window.scrollTo(0, 0);
+    }
+
+    function gotoNextPoem() { return stepPoem(1); }
+    function gotoPrevPoem() { return stepPoem(-1); }
 
     function toggleFav() {
         const p = State.activePoem;
@@ -823,6 +953,7 @@
 
     // ============== 收藏 / 历史 ==============
     function renderFav() {
+        pushHistoryState('list');
         const ids = [...State.favSet];
         State.listMode = 'fav';
         State.listSource = null;
@@ -958,6 +1089,17 @@
     function bindEvents() {
         const mask = $('#sideMask');
         if (mask) mask.addEventListener('click', closeSideMenu);
+        // popstate: WebView.goBack() 触发, 根据 history.state.page 切回对应页
+        window.addEventListener('popstate', (ev) => {
+            const page = (ev.state && ev.state.page) || 'home';
+            logNav('pop', page, 'state=', ev.state, 'len=', history.length);
+            inPopstate = true;
+            try {
+                switchPage(page);
+            } finally {
+                inPopstate = false;
+            }
+        });
         $$('.tab-btn').forEach(b => b.addEventListener('click', () => {
             const p = b.dataset.page;
             if (p === 'fav') renderFav();
@@ -967,12 +1109,25 @@
         const search = $('#searchInput');
         if (search) {
             let tm;
+            // 记录上一次搜索的 query, 避免重复进入搜索页时 push 多条历史
+            let lastSearchQ = '';
             search.addEventListener('input', () => {
                 clearTimeout(tm);
                 tm = setTimeout(() => {
-                    searchPoems(search.value);
-                    State.listTitle = search.value ? '搜索：' + search.value : '全部诗词';
-                    try { history.pushState({ page: 'list' }, ''); } catch (e) { /* 隐私模式可能受限 */ }
+                    const q = search.value;
+                    // 只在 query 变化或首次进入搜索时 pushState
+                    if (q !== lastSearchQ) {
+                        searchPoems(q);
+                        State.listTitle = q ? '搜索：' + q : '全部诗词';
+                        lastSearchQ = q;
+                        if (q && State.currentPage !== 'list') {
+                            pushHistoryState('list');
+                        } else if (q && State.currentPage === 'list') {
+                            // 列表内更新: 不入栈, 避免连续输入污染历史
+                        } else if (!q && State.currentPage === 'list') {
+                            // 清空: 也不入栈
+                        }
+                    }
                     $$('.page').forEach(p => p.classList.remove('active'));
                     $('#page-list').classList.add('active');
                     $$('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1002,7 +1157,12 @@
         try {
             await loadData();
             // 初始化 history.state, 让 goBack 第一次触发时也能拿到 state
-            try { history.replaceState({ page: 'home' }, ''); } catch (e) { /* ignore */ }
+            try {
+                history.replaceState({ page: 'home' }, '');
+                logNav('init replaceState home, len=', history.length);
+            } catch (e) {
+                logNav('init replaceState fail', e && e.message);
+            }
         } catch (e) {
             const mask = $('#loadingMask');
             if (mask) {
@@ -1021,6 +1181,7 @@
         openSideMenu, closeSideMenu,
         loadMoreList,
         toggleAnno, setAnnoDefault,
+        gotoNextPoem, gotoPrevPoem,
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
     else init();

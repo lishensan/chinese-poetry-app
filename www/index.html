@@ -68,6 +68,11 @@
             <div id="detailAnnotations" class="d-annotations"></div>
             <div id="detailTags" class="d-tags"></div>
         </div>
+        <div class="detail-nav hide" id="detailNav">
+            <button class="dn-btn" id="btnPrevPoem" onclick="App.gotoPrevPoem()">‹ 上一首</button>
+            <span class="dn-pos" id="detailNavPos">-/-</span>
+            <button class="dn-btn" id="btnNextPoem" onclick="App.gotoNextPoem()">下一首 ›</button>
+        </div>
         <div class="action-bar">
             <button id="btnMask" class="action-btn" onclick="App.toggleMask()">遮罩背诵</button>
             <button id="btnFav" class="action-btn" onclick="App.toggleFav()">☆ 收藏</button>
