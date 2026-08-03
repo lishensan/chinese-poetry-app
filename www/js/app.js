@@ -64,11 +64,15 @@
         authors: null,
         // 精简索引 (启动后 5ms 内建好, 用于 O(1) 查询)
         idx: null,                  // window.POEM_IDX 引用
-        idxById: new Map(),         // id -> {id,t,a,src,rh,dy}
+        idxById: new Map(),         // id -> item
         idxBySrc: new Map(),        // src -> [id]
         idxByAuthor: new Map(),     // author -> [id]
         idxByDynasty: new Map(),    // dy -> [id]
         idxByTitleHead: new Map(),  // title首字 -> [id]
+        // 增强: 朝代/作者首字/拼音首字母桶 (启动期一次性建, 后续查询 O(1))
+        idxByAuthorHead: new Map(), // author姓 -> [id]  ("李" -> 所有姓李作者)
+        idxByAuthorPinyin: new Map(),// author首字母大写 -> [id]  ("L" -> 李白/李白等)
+        idxByTitlePinyin: new Map(), // title首字母大写 -> [id]
         liteBySrc: new Map(),      // source -> [lite items per part]
         liteById: new Map(),       // id -> lite item
         fullCache: new Map(),      // source -> {byId: Map, raw: Array}
@@ -338,6 +342,18 @@
         const byAuthor = State.idxByAuthor;
         const byDy = State.idxByDynasty;
         const byTitle = State.idxByTitleHead;
+        // 增强: 3 个新桶
+        const byAuthorHead = State.idxByAuthorHead;
+        const byAuthorPy = State.idxByAuthorPinyin;
+        const byTitlePy = State.idxByTitlePinyin;
+        // 拼音辅助: 缺失或非字符串时返回空, 不抛错
+        const py = (s) => {
+            if (!s || !window.pinyin) return '';
+            try {
+                return window.pinyin(s, { pattern: 'first', toneType: 'none' })
+                    .toUpperCase().replace(/\s+/g, '');
+            } catch (e) { return ''; }
+        };
         for (let i = 0; i < idx.items.length; i++) {
             const it = idx.items[i];
             byId.set(it.id, it);
@@ -359,11 +375,34 @@
                 let thArr = byTitle.get(head);
                 if (!thArr) { thArr = []; byTitle.set(head, thArr); }
                 thArr.push(it.id);
+                // title 拼音首字母桶
+                const tpy = py(it.t);
+                if (tpy) {
+                    const k = tpy.charAt(0);
+                    let arr = byTitlePy.get(k);
+                    if (!arr) { arr = []; byTitlePy.set(k, arr); }
+                    arr.push(it.id);
+                }
+            }
+            // author 姓桶 (中文首字) + 拼音首字母桶
+            if (it.a) {
+                const aHead = it.a.charAt(0);
+                let ahArr = byAuthorHead.get(aHead);
+                if (!ahArr) { ahArr = []; byAuthorHead.set(aHead, ahArr); }
+                ahArr.push(it.id);
+                const apy = py(it.a);
+                if (apy) {
+                    const k = apy.charAt(0);
+                    let arr = byAuthorPy.get(k);
+                    if (!arr) { arr = []; byAuthorPy.set(k, arr); }
+                    arr.push(it.id);
+                }
             }
         }
         const ms = (performance.now() - t0).toFixed(1);
         if (DBG()) console.log(`[idx] built ${idx.items.length} items in ${ms}ms, ` +
-            `byId=${byId.size} bySrc=${bySrc.size} byAuthor=${byAuthor.size} byDy=${byDy.size} byTitle=${byTitle.size}`);
+            `byId=${byId.size} bySrc=${bySrc.size} byAuthor=${byAuthor.size} byDy=${byDy.size} byTitle=${byTitle.size} ` +
+            `byAuthorHead=${byAuthorHead.size} byAuthorPy=${byAuthorPy.size} byTitlePy=${byTitlePy.size}`);
     }
 
     // ============== 分类 lite 分片懒加载 ==============
@@ -510,6 +549,66 @@
                     <div class="cat-count">${ids.length.toLocaleString()} 首</div>
                 </div>`;
             }).join('');
+            renderDynastyChips();
+        }
+    }
+
+    /**
+     * 首页朝代 chip: 走 idxByDy O(1) 取数量, 横向滚动条.
+     * 点击进入 list 页, listSource=null, listIds=该朝代 id 列表.
+     */
+    function renderDynastyChips() {
+        const el = $('#dyChips');
+        if (!el) return;
+        const dyLabels = {
+            '唐': '唐', '宋': '宋', '元': '元',
+            '先秦': '先秦', '魏晋': '魏晋', '清': '清', '其他': '其他',
+        };
+        const entries = [];
+        for (const [dy, ids] of State.idxByDynasty) {
+            entries.push({ dy, count: ids.length });
+        }
+        // 按朝代顺序排: 唐/宋/元/先秦/魏晋/清/其他
+        const order = ['唐', '宋', '元', '先秦', '魏晋', '清', '其他'];
+        entries.sort((a, b) => order.indexOf(a.dy) - order.indexOf(b.dy));
+        el.innerHTML = entries.map(e => {
+            const label = dyLabels[e.dy] || e.dy;
+            return `<div class="dy-chip" onclick="App.openDynasty('${escapeAttr(e.dy)}', '${escapeAttr(label)}')">
+                <div class="dy-name">${escapeHtml(label)}</div>
+                <div class="dy-count">${e.count.toLocaleString()}</div>
+            </div>`;
+        }).join('');
+    }
+
+    /** 朝代列表: 走 idxByDy O(1) */
+    async function openDynasty(dy, label) {
+        const ids = State.idxByDynasty.get(dy);
+        if (!ids || ids.length === 0) { toast('该朝代暂无作品'); return; }
+        pushHistoryState('list');
+        State.listMode = 'dynasty';
+        State.listSource = null;  // 朝代模式无单一 source
+        State.listTitle = label;
+        State.listIds = ids.slice();  // 复制避免影响 idxByDy
+        State.listOffset = 0;
+        switchPage('list');
+        renderListHeader();
+        $('#listContainer').innerHTML = '<div class="loading">加载中...</div>';
+        $('#listMore').classList.add('hide');
+        // 预加载列表所需的所有 source 分片 (按需: 第 0 分片先拉, 边滚边拉)
+        // 朝代模式: 不同 id 可能在不同 source, 先按 src 分组
+        const bySrc = {};
+        for (let i = 0; i < ids.length; i++) {
+            const it = State.idxById.get(ids[i]);
+            if (!it) continue;
+            (bySrc[it.src] || (bySrc[it.src] = [])).push(ids[i]);
+        }
+        try {
+            // 第一批: 每个 source 的 part 0
+            await Promise.all(Object.keys(bySrc).map(s => ensureLitePart(s, 0).catch(() => null)));
+            $('#listContainer').innerHTML = '';
+            renderList();
+        } catch (e) {
+            $('#listContainer').innerHTML = `<div class="empty">加载失败：${escapeHtml(e.message)}</div>`;
         }
     }
     function greetingByHour() {
@@ -603,11 +702,11 @@
     }
 
     /**
-     * 搜索: 三段式
-     * 1) author 桶: idxByAuthor 完整键名匹配 (O(桶数))
-     * 2) title 桶: idxByTitleHead 找首字桶, 子串包含 (O(桶大小))
-     * 3) 全文子串: idxById 全量子串扫描 (兜底, 9万条 ~5ms)
-     * 无需依赖 liteById, 启动即可搜, 全字段命中.
+     * 搜索: 多维度联合匹配
+     *  - 纯中文 (>=1): 标题/作者中文子串 + 作者首字桶
+     *  - 纯英文 (A-Z): 作者拼音首字母桶 + 标题拼音首字母桶
+     *  - 单个中文字: 作者姓桶 + 标题首字桶
+     * 命中后去重, 总耗时 O(桶大小) + O(N) 子串扫描.
      */
     function searchPoems(q) {
         q = (q || '').trim();
@@ -620,29 +719,71 @@
         State.listQuery = q;
         const t0 = performance.now();
         const hitSet = new Set();
-        const lower = q;  // 中文不分大小写, 直接子串匹配
-
-        // 1) author 全名匹配 (O(桶))
-        const authorKeys = State.idxByAuthor.keys();
-        for (const name of authorKeys) {
-            if (name && name.indexOf(lower) >= 0) {
-                const ids = State.idxByAuthor.get(name);
-                for (let i = 0; i < ids.length; i++) hitSet.add(ids[i]);
+        const isPinyin = /^[A-Za-z]+$/.test(q);
+        const isSingleChar = q.length === 1;
+        if (isPinyin) {
+            const u = q.toUpperCase();
+            // 作者拼音首字母: L -> 李白/李白/...
+            const auArr = State.idxByAuthorPinyin.get(u);
+            if (auArr) for (let i = 0; i < auArr.length; i++) hitSet.add(auArr[i]);
+            // 标题拼音首字母: J -> 静夜思/江雪/...
+            const tArr = State.idxByTitlePinyin.get(u);
+            if (tArr) for (let i = 0; i < tArr.length; i++) hitSet.add(tArr[i]);
+            // 拼音前缀: LB -> 李白
+            if (q.length >= 2) {
+                const byAuthor = State.idxByAuthor;
+                for (const name of byAuthor.keys()) {
+                    if (!name) continue;
+                    const np = getAuthorPinyin(name);
+                    if (np && np.indexOf(u) === 0) {
+                        const ids = byAuthor.get(name);
+                        for (let i = 0; i < ids.length; i++) hitSet.add(ids[i]);
+                    }
+                }
             }
-        }
-
-        // 2) title 桶 + 全文子串: 9万条, 单次扫描
-        const byId = State.idxById;
-        for (const [id, it] of byId) {
-            if (hitSet.has(id)) continue;
-            if ((it.t && it.t.indexOf(lower) >= 0) ||
-                (it.a && it.a.indexOf(lower) >= 0)) {
-                hitSet.add(id);
+        } else if (isSingleChar) {
+            // 单个汉字: 作者姓桶 + 标题首字桶
+            const ah = State.idxByAuthorHead.get(q);
+            if (ah) for (let i = 0; i < ah.length; i++) hitSet.add(ah[i]);
+            const th = State.idxByTitleHead.get(q);
+            if (th) for (let i = 0; i < th.length; i++) hitSet.add(th[i]);
+        } else {
+            // 中文子串: 作者全名子串 + 标题子串
+            const byAuthor = State.idxByAuthor;
+            for (const name of byAuthor.keys()) {
+                if (name && name.indexOf(q) >= 0) {
+                    const ids = byAuthor.get(name);
+                    for (let i = 0; i < ids.length; i++) hitSet.add(ids[i]);
+                }
+            }
+            // 标题子串 (走 idxById 全扫, 9万条 ~5ms)
+            const byId = State.idxById;
+            for (const [id, it] of byId) {
+                if (hitSet.has(id)) continue;
+                if ((it.t && it.t.indexOf(q) >= 0) ||
+                    (it.a && it.a.indexOf(q) >= 0)) {
+                    hitSet.add(id);
+                }
             }
         }
         State.listIds = Array.from(hitSet);
         State.listOffset = 0;
         if (DBG()) console.log(`[search] q="${q}" hits=${State.listIds.length} in ${(performance.now()-t0).toFixed(1)}ms`);
+    }
+
+    /** 缓存: author 拼音首字母 (运行时算, 给作者页前缀匹配用) */
+    const _auPyCache = new Map();
+    function getAuthorPinyin(name) {
+        if (_auPyCache.has(name)) return _auPyCache.get(name);
+        let p = '';
+        if (window.pinyin && name) {
+            try {
+                p = window.pinyin(name, { pattern: 'first', toneType: 'none' })
+                    .toUpperCase().replace(/\s+/g, '');
+            } catch (e) { /* ignore */ }
+        }
+        _auPyCache.set(name, p);
+        return p;
     }
 
     function renderListHeader() {
@@ -711,11 +852,13 @@
             }
             return;
         }
-        // 其它模式: 直接按 State.listIds 渲染
+        // 其它模式 (author/search/dynasty): 渲染已加载 lite 的 id, 未加载的标"未加载"占位
         const start = State.listOffset;
         const slice = State.listIds.slice(start, start + State.listPageSize);
         if (slice.length === 0) {
-            list.innerHTML = '<div class="empty">无匹配诗词<br><br>提示: 搜索基于已浏览的诗词</div>';
+            list.innerHTML = State.listMode === 'search'
+                ? '<div class="empty">无匹配结果</div>'
+                : '<div class="empty">暂无内容</div>';
             $('#listMore').classList.add('hide');
             return;
         }
@@ -731,7 +874,7 @@
         const hasMore = State.listOffset < State.listIds.length;
         const more = $('#listMore');
         more.classList.toggle('hide', !hasMore);
-        more.textContent = '点击加载更多 ↓';
+        more.textContent = State.listMode === 'dynasty' ? '加载下一批 ↓' : '点击加载更多 ↓';
     }
 
     function renderItem(p) {
@@ -744,7 +887,49 @@
         </div>`;
     }
 
-    function loadMoreList() { renderList(); }
+    /**
+     * 加载更多:
+     * - category: 已有 part 内继续翻页
+     * - dynasty: 检查"未加载"项, 按 src 分组批量加载缺失分片
+     * - 其它: 继续翻页
+     */
+    async function loadMoreList() {
+        // dynasty 模式: 检查是否有未加载 lite, 优先补齐
+        if (State.listMode === 'dynasty') {
+            const missingSrcParts = new Set();  // src|part
+            for (let i = 0; i < State.listIds.length; i++) {
+                if (State.liteById.has(State.listIds[i])) continue;
+                const it = State.idxById.get(State.listIds[i]);
+                if (!it) continue;
+                const src = it.src;
+                const parts = (State.index.source_parts && State.index.source_parts[src]) || [];
+                const arr = State.index.by_source[src] || [];
+                const pos = arr.indexOf(State.listIds[i]);
+                if (pos < 0) continue;
+                for (let j = 0; j < parts.length; j++) {
+                    if (pos >= parts[j].start && pos < parts[j].end) {
+                        const key = src + '|' + j;
+                        if (!State.liteBySrc.has(src) || !State.liteBySrc.get(src)[j]) {
+                            missingSrcParts.add(key);
+                        }
+                        break;
+                    }
+                }
+            }
+            if (missingSrcParts.size > 0) {
+                const more = $('#listMore');
+                if (more) { more.textContent = '加载分片中...'; more.classList.add('hide'); }
+                // 串行加载 (避免并发 IO 风暴)
+                for (const key of missingSrcParts) {
+                    const [s, p] = key.split('|');
+                    try { await ensureLitePart(s, parseInt(p, 10)); } catch (e) { /* 单个失败不影响 */ }
+                }
+                renderList();
+                return;
+            }
+        }
+        renderList();
+    }
 
     // ============== 详情 ==============
     // 当前正在加载的注释请求版本, 防止旧请求覆盖新诗
@@ -1296,7 +1481,7 @@
     }
 
     window.App = {
-        openPoem, openCategory, openAuthor,
+        openPoem, openCategory, openAuthor, openDynasty,
         toggleFav, toggleMask,
         toggleTheme, cycleFont, cycleFontSize,
         openSideMenu, closeSideMenu,

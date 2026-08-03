@@ -40,6 +40,9 @@
 
         <div id="pod" class="poem-of-day"></div>
 
+        <div class="section-title">按朝代浏览</div>
+        <div id="dyChips" class="dynasty-chips"></div>
+
         <div class="section-title">分类</div>
         <div id="catGrid" class="cat-grid"></div>
     </div>
@@ -48,7 +51,7 @@
     <div id="page-list" class="page">
         <div class="search-box">
             <span class="search-box-icon">🔍</span>
-            <input id="searchInput" type="search" placeholder="搜索诗名/作者/内容/标签" autocomplete="off">
+            <input id="searchInput" type="search" placeholder="搜索诗名/作者 (支持拼音首字母, 如 l→李白)" autocomplete="off">
         </div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
             <h2 id="listTitle" style="font-family:var(--font-kai);color:var(--accent);font-size:18px;">诗词</h2>
@@ -138,6 +141,8 @@
 <script src="data/notes_index.js"></script>
 <script src="data/notes_part_index.js"></script>
 <script src="data/idx.js"></script>
+<!-- 拼音库 (本地, 离线). 暴露 window.pinyin 用于作者/标题转拼音首字母, 启动期建桶. -->
+<script src="data/pinyin-pro.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

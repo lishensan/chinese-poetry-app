@@ -184,6 +184,44 @@ body { padding-bottom: env(safe-area-inset-bottom); }
     gap: 10px;
     margin-bottom: 18px;
 }
+/* 朝代横向 chip 列表 */
+.dynasty-chips {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 4px 0 12px 0;
+    margin-bottom: 6px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+.dynasty-chips::-webkit-scrollbar { display: none; }
+.dy-chip {
+    flex: 0 0 auto;
+    min-width: 64px;
+    background: var(--bg-paper);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    text-align: center;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.dy-chip:active {
+    transform: scale(0.95);
+    background: var(--accent);
+    color: #fff;
+}
+.dy-chip:active .dy-count { color: rgba(255,255,255,0.85); }
+.dy-name {
+    font-family: var(--font-kai);
+    font-size: 16px;
+    color: var(--accent);
+    margin-bottom: 2px;
+}
+.dy-count {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
 .cat-card {
     background: var(--bg-paper);
     border: 1px solid var(--border);
