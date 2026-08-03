@@ -620,12 +620,21 @@
 
     // ============== 列表 ==============
     async function openCategory(source, label) {
+        // 防御: loadData 未完成 (极快点击) 时, 提示等待
+        if (!State.index || !State.idx) {
+            toast('数据加载中, 请稍候再试...');
+            return;
+        }
         pushHistoryState('list');
         State.listMode = 'category';
         State.listSource = source;
         State.listTitle = label;
         // 走内存索引 idxBySrc: O(1) 取 id 列表, 替代 by_source[src] 遍历
-        State.listIds = State.idxBySrc.get(source) || (State.index.by_source && State.index.by_source[source]) || [];
+        // 三重兜底: idxBySrc > by_source > []
+        const idsByIdx = State.idxBySrc.get(source);
+        const idsByLegacy = State.index.by_source && State.index.by_source[source];
+        State.listIds = idsByIdx || idsByLegacy || [];
+        if (State.listIds.length === 0) { toast('该分类暂无作品'); return; }
         State.listPartLoaded = 0;
         State.listOffset = 0;
         State.listPageSize = 20;
