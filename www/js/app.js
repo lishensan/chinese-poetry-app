@@ -401,14 +401,18 @@
         try {
             const v = JSON.parse(localStorage.getItem(STORAGE.anno) || 'null');
             if (v && typeof v === 'object') {
-                return {
-                    tr: v.tr !== undefined ? !!v.tr : State.annoDefault.tr,
-                    ex1: v.ex1 !== undefined ? !!v.ex1 : State.annoDefault.ex1,
-                    int: v.int !== undefined ? !!v.int : State.annoDefault.int,
-                };
+                const tr = v.tr !== undefined ? !!v.tr : State.annoDefault.tr;
+                const ex1 = v.ex1 !== undefined ? !!v.ex1 : State.annoDefault.ex1;
+                const int = v.int !== undefined ? !!v.int : State.annoDefault.int;
+                // 防御: 历史版本可能存了 {tr:false, ex1:false, int:false} (全关),
+                // 这会导致详情页不显示任何注释, 用户误以为没注释. 自动回退默认.
+                if (!tr && !ex1 && !int) {
+                    return { tr: true, ex1: true, int: false };
+                }
+                return { tr, ex1, int };
             }
         } catch (e) { /* ignore */ }
-        return { ...State.annoDefault };
+        return { tr: true, ex1: true, int: false };
     }
     function saveAnno() { try { localStorage.setItem(STORAGE.anno, JSON.stringify(State.annoDefault)); } catch (e) { /* ignore */ } }
 
@@ -780,7 +784,12 @@
         // 切换诗时清空临时覆盖, 使用全局默认
         State.tmpAnnoOverride = null;
         try {
-            const source = State.liteById.get(id).src || findSourceOfId(id);
+            // source 解析 (优先级: 内存 idxById O(1) > lite.src > by_source 兜底)
+            // 修复前: 依赖 lite.src, 但 lite 数据没 src 字段, 经常回退失败.
+            // 修复后: 始终以 idxById 为主, 兼容 lite.src 旧逻辑.
+            const source = (State.idxById.get(id) && State.idxById.get(id).src)
+                || (State.liteById.get(id) && State.liteById.get(id).src)
+                || findSourceOfId(id);
             if (!source) throw new Error('未找到该诗词所在分类');
             const full = await ensureFullLoaded(source);
             const p = full.byId.get(id) || State.liteById.get(id);
@@ -797,6 +806,7 @@
             // 异步加载注释 (不阻塞主显示)
             loadAndRenderAnno(source, id);
         } catch (e) {
+            if (DBG()) console.error('[openPoem] error:', e && e.message);
             $('#detailBody').textContent = '加载失败: ' + e.message;
         }
     }
