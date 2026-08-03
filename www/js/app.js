@@ -347,10 +347,13 @@
         const byAuthorPy = State.idxByAuthorPinyin;
         const byTitlePy = State.idxByTitlePinyin;
         // 拼音辅助: 缺失或非字符串时返回空, 不抛错
+        // pinyin-pro 库暴露 globalThis.pinyinPro = { pinyin, ... }, 不是 pinyin 全局
         const py = (s) => {
-            if (!s || !window.pinyin) return '';
+            if (!s) return '';
+            const lib = window.pinyinPro || window.pinyin;
+            if (!lib || typeof lib.pinyin !== 'function') return '';
             try {
-                return window.pinyin(s, { pattern: 'first', toneType: 'none' })
+                return lib.pinyin(s, { pattern: 'first', toneType: 'none' })
                     .toUpperCase().replace(/\s+/g, '');
             } catch (e) { return ''; }
         };
@@ -496,6 +499,8 @@
         else if (name === 'author') renderAuthorPage();
         else if (name === 'list') {
             // 列表页: 重新渲染 (popstate 回到 list 时, 数据应还在 State)
+            // 防御: 如果有 listInRendering 标志, 跳过 (openCategory 后续会调 renderList)
+            if (State.listInRendering) return;
             renderListHeader();
             renderList();
         } else if (name === 'detail') {
@@ -590,6 +595,10 @@
         State.listTitle = label;
         State.listIds = ids.slice();  // 复制避免影响 idxByDy
         State.listOffset = 0;
+        // 自适应 pageSize: 小朝代全展示, 大朝代分页
+        State.listPageSize = ids.length < 200 ? ids.length : (ids.length <= 1000 ? 50 : 20);
+        // 防竞态
+        State.listInRendering = true;
         switchPage('list');
         renderListHeader();
         $('#listContainer').innerHTML = '<div class="loading">加载中...</div>';
@@ -609,6 +618,8 @@
             renderList();
         } catch (e) {
             $('#listContainer').innerHTML = `<div class="empty">加载失败：${escapeHtml(e.message)}</div>`;
+        } finally {
+            State.listInRendering = false;
         }
     }
     function greetingByHour() {
@@ -639,6 +650,8 @@
         State.listOffset = 0;
         // 自适应 pageSize: 小分类全展示, 避免翻 2 页才看到第 24 条
         State.listPageSize = State.listIds.length < 200 ? State.listIds.length : (State.listIds.length <= 1000 ? 50 : 20);
+        // 设标志, 防止 switchPage('list') 内部再调一次 renderList 跟后续 race
+        State.listInRendering = true;
         switchPage('list');
         renderListHeader();
         const container = $('#listContainer');
@@ -652,6 +665,8 @@
             renderList();
         } catch (e) {
             container.innerHTML = `<div class="empty">加载失败：${escapeHtml(e.message)}<br><br><a onclick="App.openCategory('${escapeAttr(source)}','${escapeAttr(label)}')">点击重试</a></div>`;
+        } finally {
+            State.listInRendering = false;
         }
     }
 
@@ -665,6 +680,9 @@
         State.listTitle = name;
         State.listIds = ids;
         State.listOffset = 0;
+        State.listPageSize = ids.length < 200 ? ids.length : (ids.length <= 1000 ? 50 : 20);
+        // 防竞态
+        State.listInRendering = true;
         switchPage('list');
         renderListHeader();
         $('#listContainer').innerHTML = '<div class="loading">加载中...</div>';
@@ -696,6 +714,8 @@
             renderList();
         } catch (e) {
             $('#listContainer').innerHTML = `<div class="empty">加载失败：${escapeHtml(e.message)}</div>`;
+        } finally {
+            State.listInRendering = false;
         }
     }
 
@@ -786,9 +806,10 @@
     function getAuthorPinyin(name) {
         if (_auPyCache.has(name)) return _auPyCache.get(name);
         let p = '';
-        if (window.pinyin && name) {
+        const lib = window.pinyinPro || window.pinyin;
+        if (lib && typeof lib.pinyin === 'function' && name) {
             try {
-                p = window.pinyin(name, { pattern: 'first', toneType: 'none' })
+                p = lib.pinyin(name, { pattern: 'first', toneType: 'none' })
                     .toUpperCase().replace(/\s+/g, '');
             } catch (e) { /* ignore */ }
         }
@@ -832,6 +853,7 @@
                     return renderItem(p);
                 }).join('');
                 list.innerHTML = (start > 0 ? list.innerHTML : '') + html;
+                if (DBG()) console.log(`[renderList] html len=${html.length}, list.innerHTML after =${list.innerHTML.length}`);
                 State.listOffset += slice.length;
                 const hasMore = State.listOffset < State.listIds.length;
                 const more = $('#listMore');
